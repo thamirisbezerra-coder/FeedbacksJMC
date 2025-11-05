@@ -436,11 +436,23 @@
         async function initializeAppAndAuth() {
             try {
                 // Configuração do Firebase
-                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                // PASSO 1: COPIE SUA CONFIGURAÇÃO DO FIREBASE AQUI
+                // Obtenha isso no console do Firebase (Configurações do Projeto > Seus aplicativos)
+                const firebaseConfig = {
+                    apiKey: "AIzaSyC_L0nsIlnd97QtQ-7ZIIv47EfJeBZMAPU",
+                    authDomain: "central-de-planilhas.firebaseapp.com",
+                    projectId: "central-de-planilhas",
+                    storageBucket: "central-de-planilhas.firebasestorage.app",
+                    messagingSenderId: "766278991389",
+                    appId: "1:766278991389:web:ea9e87bf8a1465291490f4",
+                    measurementId: "G-VGLXX3JK9B"
+                };
+                
+                // Usaremos o ID do projeto para identificar o app, já que __app_id não existe fora do Canvas
+                const appId = firebaseConfig.projectId; 
 
-                if (!firebaseConfig.apiKey) {
-                    loadingText.textContent = 'Erro: Configuração do Firebase não encontrada.';
+                if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "SUA_API_KEY") {
+                    loadingText.textContent = 'Erro: Configuração do Firebase não encontrada. Cole sua "firebaseConfig" no código (linha 300).';
                     return;
                 }
 
@@ -450,8 +462,8 @@
                 setLogLevel('Debug'); // Ativa logs detalhados do Firestore
 
                 // Define o caminho da coleção no Firestore
-                // Usando um caminho público para colaboração
-                dbCollection = collection(db, `artifacts/${appId}/public/data/jmc_feedbacks`);
+                // ATENÇÃO: Mudamos para um caminho simples, pois não estamos mais no ambiente "artifacts"
+                dbCollection = collection(db, `jmc_feedbacks`);
 
                 // Autenticação
                 onAuthStateChanged(auth, (user) => {
@@ -468,11 +480,13 @@
                     }
                 });
 
-                // Tenta login com token ou anônimo
-                if (typeof __initial_auth_token !== 'undefined') {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
+                // Tenta login anônimo (pois não temos mais o __initial_auth_token)
+                try {
                     await signInAnonymously(auth);
+                } catch (authError) {
+                    console.error("Erro no login anônimo:", authError);
+                    loadingText.textContent = "Erro: Falha ao autenticar. Verifique se o Login Anônimo está ativado no Firebase.";
+                    return; // Para a execução se não puder logar
                 }
 
             } catch (error) {
