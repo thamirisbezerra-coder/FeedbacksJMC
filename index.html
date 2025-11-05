@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portal de Feedback de Amostras</title>
+    <!-- Carregando Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Estilos adicionais para melhor UI */
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        /* Cor de destaque para hover nas linhas */
+        tbody tr:hover {
+            background-color: #f9fafb;
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+        
+        /* Overlay de Carregamento */
+        #loading-overlay {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+            transition: opacity 0.3s ease;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Estilo para o spinner do botão salvar */
+        #saveBtn .spinner {
+            width: 20px;
+            height: 20px;
+            border-width: 2px;
+            border-top-color: white;
+            border-left-color: white;
+            border-right-color: white;
+            border-bottom-color: transparent;
+        }
+    </style>
+    <!-- Imports do Firebase -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Variáveis globais do Firebase
+        let app, db, auth;
+        let dbCollection;
+        let userId;
+
+        // Elementos da UI
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+        const tableBody = document.getElementById('table-body');
+        const saveBtn = document.getElementById('saveBtn');
+        const saveStatus = document.getElementById('save-status');
+        const alertModal = document.getElementById('alertModal');
+        const alertMessage = document.getElementById('alertMessage');
+        const closeAlertBtn = document.getElementById('closeAlertBtn');
+
+        // Opções de feedback
+        const feedbackOptions = [
+            { value: "", text: "-- Selecione uma opção --", disabled: true },
+            { 
+                label: "Aprovados", 
+                options: [
+                    { value: "APROVADO SEM PEDIDO", text: "APROVADO SEM PEDIDO" },
+                    { value: "COM PEDIDO", text: "COM PEDIDO" }
+                ] 
+            },
+            { 
+                label: "Reprovados", 
+                options: [
+                    { value: "FORA DO PERFIL DO CLIENTE", text: "FORA DO PERFIL DO CLIENTE" },
+                    { value: "APRESENTACAO PRO ATIVA", text: "APRESENTACAO PRO ATIVA" },
+                    { value: "REPRESENTACAO / DISTRIBUIDOR", text: "REPRESENTACAO / DISTRIBUIDOR" },
+                    { value: "SEM RETORNO DO CLIENTE", text: "SEM RETORNO DO CLIENTE" },
+                    { value: "FORA DA ESPECIFICACAO DO CLIENTE", text: "FORA DA ESPECIFICACAO DO CLIENTE" },
+                    { value: "PRODUTO DESCONTINUADO", text: "PRODUTO DESCONTINUADO" },
+                    { value: "QUANTIDADE INSUFICIENTE", text: "QUANTIDADE INSUFICIENTE" },
+                    { value: "EXTRAVIADA", text: "EXTRAVIADA" },
+                    { value: "FRACA / ESTOURANDO / COM CHUVEIRO", text: "FRACA / ESTOURANDO / COM CHUVEILO" }
+                ] 
+            },
+            { 
+                label: "Eventos", 
+                options: [
+                    { value: "EVENTO", text: "EVENTO" }
+                ] 
+            }
+        ];
+
+        // Todos os dados das amostras (estáticos)
+        const allSamples = [
+            { pedido: "444022", nf: "000380471", produto: "DLA846", descricao: "PREP. DE FRUTAS SABOR SALADA DE FRUTAS FL 120", qtde: "1", statusAtual: "EM ANÁLISE" },
+            { pedido: "444028", nf: "000380858", produto: "109", descricao: "AROMA ID NATURAL QUEIJO PARMESAO PMS002", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "444028", nf: "000380858", produto: "3436", descricao: "D FUMAR QJ001", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "444028", nf: "000380858", produto: "DAR7360", descricao: "AROMA NATURAL QUEIJO PARMESAO", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "444030", nf: "000380194", produto: "3377", descricao: "PREP. DE FRUTAS SABOR COCO D", qtde: "0,5", statusAtual: "EM ANÁLISE" },
+            { pedido: "444030", nf: "000380194", produto: "3752", descricao: "PREP. DE FRUTAS SABOR MORANGO COM PEDACOS 02", qtde: "0,5", statusAtual: "EM ANÁLISE" },
+            { pedido: "444030", nf: "000380194", produto: "DLA846", descricao: "PREP. DE FRUTAS SABOR SALADA DE FRUTAS FL 120", qtde: "0,5", statusAtual: "EM ANÁLISE" },
+            { pedido: "449156", nf: "000386751", produto: "DLA301", descricao: "PREP. DE FRUTA SABOR MORANGO YP 580", qtde: "1", statusAtual: "EM ANÁLISE" },
+            { pedido: "449417", nf: "000384999", produto: "811", descricao: "DOREFOS CY", qtde: "3", statusAtual: "EM ANÁLISE" },
+            { pedido: "449417", nf: "000384999", produto: "5402", descricao: "VERSALAC RPF PLUS", qtde: "6", statusAtual: "EM ANÁLISE" },
+            { pedido: "450195", nf: "000385770", produto: "5469", descricao: "DFUMAR QJ004", qtde: "1", statusAtual: "EM ANÁLISE" },
+            { pedido: "450195", nf: "000385770", produto: "DLA914", descricao: "DFUMAR QJ002", qtde: "1", statusAtual: "EM ANÁLISE" },
+            { pedido: "450195", nf: "000385770", produto: "DLA915", descricao: "DFUMAR QJ003", qtde: "1", statusAtual: "EM ANÁLISE" },
+            { pedido: "450665", nf: "000386522", produto: "3511", descricao: "DOREFOS BL S 02", qtde: "0,05", statusAtual: "Amostra sem Feedback" },
+            { pedido: "451438", nf: "000386908", produto: "811", descricao: "DOREFOS CY", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "451438", nf: "000386908", produto: "5402", descricao: "VERSALAC RPF PLUS", qtde: "3", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "451572", nf: "000388946", produto: "3265", descricao: "AROMA ID NATURAL CHOCOLATE AMARGO", qtde: "0,04", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "451572", nf: "000388946", produto: "4568", descricao: "AROMA ID NATURAL CHOCOLATE", qtde: "0,04", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "451572", nf: "000388946", produto: "DAR6287", descricao: "AROMA ID NAT CHOCOLATE BELGA", qtde: "0,04", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "451572", nf: "000388946", produto: "2070", descricao: "PREP. TIPO GELEIA SABOR MORANGO", qtde: "0,5", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452758", nf: "000388537", produto: "703", descricao: "PREP. DE FRUTA SABOR MORANGO", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452758", nf: "000388537", produto: "DLA624.03", descricao: "PREP. DE FRUTAS SABOR FRUTAS VERMELHAS YL 593", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452758", nf: "000388537", produto: "DLA624.04", descricao: "PREP. DE FRUTAS SABOR FRUTAS VERMELHAS YL 594", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452758", nf: "000388537", produto: "DLA627.04", descricao: "PREP. DE FRUTAS SABOR MORANGO YL 594", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452764", nf: "000388534", produto: "3752", descricao: "PREP. DE FRUTAS SABOR MORANGO COM PEDACOS 02", qtde: "2", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452847", nf: "000389022", produto: "DLA978.02", descricao: "PREPARADO DE FRUTAS SABOR MIRTILO S/ ADIÇÃO DE AÇÚCAR WP 092", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452847", nf: "000389022", produto: "DLA979.02", descricao: "PREP. DE FRUTAS SABOR BAUNILHA S/ ADIÇÃO DE AÇÚCAR WL 092", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452847", nf: "000389022", produto: "DLA980.02", descricao: "PREP. DE FRUTAS SABOR MORANGO S/ ADIÇÃO DE AÇÚCAR WP 092", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452847", nf: "000389022", produto: "DLA981.02", descricao: "PREP. DE FRUTAS SABOR FRAMBOESA S/ ADIÇÃO DE AÇÚCAR WP 092", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "452869", nf: "000388414", produto: "3468", descricao: "AROMA ID NATURAL COCO COC011", qtde: "0,05", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "455973", nf: "000390959", produto: "109", descricao: "AROMA ID NATURAL QUEIJO PARMESAO PMS002", qtde: "0,2", statusAtual: "EM ANÁLISE" },
+            { pedido: "456926", nf: "000393216", produto: "1416", descricao: "RECHEIO DE MARACUJA (6X2KG)", qtde: "0,5", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "456926", nf: "000393216", produto: "1672", descricao: "RECHEIO DE AMARENA (6X2KG)", qtde: "0,5", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "456926", nf: "000393216", produto: "4156", descricao: "PREPARADO SABOR PACOCA 08", qtde: "0,5", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "456926", nf: "000393216", produto: "4670", descricao: "RECHEIO DE FRUTAS VERMELHAS (6X2KG)", qtde: "0,5", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "456926", nf: "000393216", produto: "DLA1046", descricao: "PREPARADO SABOR GOIABA", qtde: "0,5", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "457331", nf: "000392005", produto: "2625", descricao: "COND.PREPARADO CHEDDAR CRD002", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "457462", nf: "000392665", produto: "DAR5829", descricao: "AROMA ID NATURAL CARAMELO", qtde: "0,05", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "457462", nf: "000392665", produto: "1979", descricao: "CORANTE CARAMELO IV EM PO", qtde: "0,1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "457462", nf: "000392665", produto: "1686", descricao: "CORANTE CARAMELO", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "457754", nf: "000393004", produto: "1416", descricao: "RECHEIO DE MARACUJA (6X2KG)", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "457754", nf: "000393004", produto: "1672", descricao: "RECHEIO DE AMARENA (6X2KG)", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "457754", nf: "000393004", produto: "4156", descricao: "PREPARADO SABOR PACOCA 08", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "457754", nf: "000393004", produto: "4670", descricao: "RECHEIO DE FRUTAS VERMELHAS (6X2KG)", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "457754", nf: "000393004", produto: "DLA1046", descricao: "PREPARADO SABOR GOIABA", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "457754", nf: "000393004", produto: "DLA995", descricao: "PREP. DE FRUTAS SABOR COCO YP 590", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "457812", nf: "000392912", produto: "109", descricao: "AROMA ID NATURAL QUEIJO PARMESAO PMS002", qtde: "4", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "458108", nf: "000393311", produto: "3398.20", descricao: "PREP. DE FRUTA SABOR AMEIXA VR D", qtde: "1", statusAtual: "EM ANÁLISE" },
+            { pedido: "458108", nf: "000393311", produto: "3752", descricao: "PREP. DE FRUTAS SABOR MORANGO COM PEDACOS 02", qtde: "1", statusAtual: "EM ANÁLISE" },
+            { pedido: "458108", nf: "000393311", produto: "811", descricao: "DOREFOS CY", qtde: "5", statusAtual: "EM ANÁLISE" },
+            { pedido: "458109", nf: "000392911", produto: "5402", descricao: "VERSALAC RPF PLUS", qtde: "3", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "458109", nf: "000392911", produto: "811", descricao: "DOREFOS CY", qtde: "5", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "458369", nf: "000392910", produto: "1534", descricao: "DOREMIX RC", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "458369", nf: "000392910", produto: "811", descricao: "DOREFOS CY", qtde: "1", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "458369", nf: "000392910", produto: "5402", descricao: "VERSALAC RPF PLUS", qtde: "2", statusAtual: "AMOSTRA NÃO TESTADA" },
+            { pedido: "458373", nf: "000393420", produto: "4567", descricao: "DOREMIX DAK", qtde: "3", statusAtual: "EM ANÁLISE" },
+            { pedido: "465064", nf: "000399004", produto: "1534", descricao: "DOREMIX RC", qtde: "0,1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "465064", nf: "000399004", produto: "5402", descricao: "VERSALAC RPF PLUS", qtde: "0,1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "465064", nf: "000399004", produto: "811", descricao: "DOREFOS CY", qtde: "0,1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "465774", nf: "000399556", produto: "023", descricao: "CORANTE CARMIM DE COCHONILHA 0103", qtde: "0,3", statusAtual: "Amostra sem Feedback" },
+            { pedido: "465774", nf: "000399556", produto: "1416", descricao: "RECHEIO DE MARACUJA (6X2KG)", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "465774", nf: "000399556", produto: "4670", descricao: "RECHEIO DE FRUTAS VERMELHAS (6X2KG)", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "465820", nf: "000402138", produto: "DLA793", descricao: "PREP. DE FRUTAS SABOR ABACAXI YP 210", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "465820", nf: "000402138", produto: "DLA924", descricao: "PREP. DE FRUTAS SABOR MARACUJÁ YP 310", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "466724", nf: "000400801", produto: "5469", descricao: "DFUMAR QJ004", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "466744", nf: "000401142", produto: "DLA914", descricao: "DFUMAR QJ002", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "466744", nf: "000401142", produto: "DLA915", descricao: "DFUMAR QJ003", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "4154", descricao: "AROMA ID NATURAL BAUNILHA", qtde: "0,04", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "3376", descricao: "PREP. DE FRUTAS SABOR MORANGO V D", qtde: "0,5", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "3752", descricao: "PREP. DE FRUTAS SABOR MORANGO COM PEDACOS 02", qtde: "1", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "1534", descricao: "DOREMIX RC", qtde: "3", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "4567", descricao: "DOREMIX DAK", qtde: "3", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "811", descricao: "DOREFOS CY", qtde: "3", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "DLA662", descricao: "DOREMIX DAX", qtde: "3", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "PQ272", descricao: "PROTEINA WPC 34", qtde: "3", statusAtual: "Amostra sem Feedback" },
+            { pedido: "467466", nf: "000403335", produto: "5402", descricao: "VERSALAC RPF PLUS", qtde: "6", statusAtual: "Amostra sem Feedback" },
+            { pedido: "468052", nf: "000402586", produto: "1740", descricao: "CARRAGENA", qtde: "1,2", statusAtual: "Amostra sem Feedback" },
+            { pedido: "468432", nf: "000402866", produto: "1534", descricao: "DOREMIX RC", qtde: "1,5", statusAtual: "Amostra sem Feedback" },
+            { pedido: "468433", nf: "000402597", produto: "DLA1170", descricao: "DOREFOS 9 MOL", qtde: "6", statusAtual: "Amostra sem Feedback" },
+            { pedido: "470626", nf: "000404347", produto: "3297", descricao: "AROMA ID NATURAL DOCE DE LEITE DCL001", qtde: "0,04", statusAtual: "Amostra sem Feedback" },
+            { pedido: "470626", nf: "000404347", produto: "DAR5897", descricao: "AROMA ID NAT DOCE DE LEITE", qtde: "0,04", statusAtual: "Amostra sem Feedback" },
+            { pedido: "470647", nf: "000403989", produto: "1740", descricao: "CARRAGENA", qtde: "0,6", statusAtual: "Amostra sem Feedback" },
+            { pedido: "470930", nf: "000404178", produto: "4308", descricao: "DOREMIX FFU", qtde: "0,5", statusAtual: "Amostra sem Feedback" },
+            { pedido: "470930", nf: "000404178", produto: "763", descricao: "DOREMIX BL H", qtde: "0,5", statusAtual: "Amostra sem Feedback" }
+        ];
+
+        // Função para preencher a tabela com os dados estáticos
+        function populateStaticData(samples) {
+            tableBody.innerHTML = ''; // Limpa a tabela
+            samples.forEach(sample => {
+                // Cria um ID único para o documento
+                const docId = `${sample.pedido}_${sample.nf}_${sample.produto}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+                const tr = document.createElement('tr');
+                tr.id = docId; // Define o ID da linha
+
+                // Define a cor da badge de status
+                let statusColorClass = 'bg-gray-100 text-gray-800';
+                if (sample.statusAtual === 'EM ANÁLISE') {
+                    statusColorClass = 'bg-blue-100 text-blue-800';
+                } else if (sample.statusAtual === 'AMOSTRA NÃO TESTADA') {
+                    statusColorClass = 'bg-yellow-100 text-yellow-800';
+                }
+
+                tr.innerHTML = `
+                    <td class="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">${sample.pedido}</td>
+                    <td class="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">${sample.nf}</td>
+                    <td class="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">${sample.produto}</td>
+                    <td class="px-4 py-3 text-sm text-gray-600">${sample.descricao}</td>
+                    <td class="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">${sample.qtde}</td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap"><span class="inline-flex items-center rounded-full ${statusColorClass} px-2.5 py-0.5 text-xs font-medium">${sample.statusAtual}</span></td>
+                    <td class="px-4 py-3 text-sm text-gray-700"><select class="feedback-select w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"></select></td>
+                    <td class="px-4 py-3 text-sm text-gray-700"><textarea class="notes-input w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" rows="2" required></textarea></td>
+                `;
+
+                const select = tr.querySelector('.feedback-select');
+                const input = tr.querySelector('.notes-input');
+
+                // Preenche o dropdown de feedback
+                feedbackOptions.forEach(item => {
+                    if (item.label) {
+                        const optgroup = document.createElement('optgroup');
+                        optgroup.label = item.label;
+                        item.options.forEach(optionData => {
+                            const option = document.createElement('option');
+                            option.value = optionData.value;
+                            option.textContent = optionData.text;
+                            optgroup.appendChild(option);
+                        });
+                        select.appendChild(optgroup);
+                    } else {
+                        const option = document.createElement('option');
+                        option.value = item.value;
+                        option.textContent = item.text;
+                        if (item.disabled) {
+                            option.disabled = true;
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    }
+                });
+
+                // Adiciona listeners para destacar linha quando preenchida
+                select.addEventListener('change', () => checkRowCompletion(tr));
+                input.addEventListener('input', () => checkRowCompletion(tr));
+
+                tableBody.appendChild(tr);
+            });
+        }
+
+        // Destaca a linha se ambos os campos estiverem preenchidos
+        function checkRowCompletion(row) {
+            if (!row) return;
+            const select = row.querySelector('.feedback-select');
+            const input = row.querySelector('.notes-input');
+            const selectValue = select.value;
+            const noteValue = input.value.trim();
+
+            if (selectValue && noteValue) {
+                row.classList.add('bg-emerald-50');
+                input.classList.remove('border-red-500', 'ring-red-500');
+            } else {
+                row.classList.remove('bg-emerald-50');
+            }
+        }
+        
+        // Função para mostrar/esconder o modal de alerta
+        function toggleAlertModal(show, message = '') {
+            const modalContent = alertModal.querySelector('.modal-content');
+            alertMessage.textContent = message;
+
+            if (show) {
+                alertModal.classList.remove('opacity-0', 'pointer-events-none');
+                modalContent.classList.remove('-translate-y-10');
+            } else {
+                alertModal.classList.add('opacity-0');
+                modalContent.classList.add('-translate-y-10');
+                setTimeout(() => {
+                    alertModal.classList.add('pointer-events-none');
+                }, 300); // Espera a transição de opacidade terminar
+            }
+        }
+        
+        // Fecha o modal de alerta
+        closeAlertBtn.addEventListener('click', () => toggleAlertModal(false));
+
+        // Listener do botão Salvar
+        saveBtn.addEventListener('click', async () => {
+            const btnText = saveBtn.querySelector('.btn-text');
+            const spinner = saveBtn.querySelector('.spinner');
+
+            // Mostra loading no botão
+            btnText.classList.add('hidden');
+            spinner.classList.remove('hidden');
+            saveBtn.disabled = true;
+            saveStatus.classList.add('opacity-0'); // Esconde status anterior
+
+            // Limpa erros de validação anteriores
+            document.querySelectorAll('.notes-input.border-red-500').forEach(input => {
+                input.classList.remove('border-red-500', 'ring-red-500');
+            });
+
+            const batch = writeBatch(db);
+            let itemsToSave = 0;
+            let missingNote = false;
+            let firstMissingRow = null;
+
+            document.querySelectorAll('#table-body tr').forEach(row => {
+                const select = row.querySelector('.feedback-select');
+                const notes = row.querySelector('.notes-input');
+                const selectValue = select.value;
+                const noteValue = notes.value.trim();
+
+                if (selectValue) { // Apenas processa se um feedback foi selecionado
+                    if (!noteValue) { // Validação: Observação é obrigatória
+                        missingNote = true;
+                        if (!firstMissingRow) {
+                            firstMissingRow = row; // Salva a primeira linha com erro
+                        }
+                        notes.classList.add('border-red-500', 'ring-red-500');
+                    } else {
+                        // Se válido, adiciona ao batch
+                        const docId = row.id;
+                        const docRef = doc(dbCollection, docId);
+                        
+                        // Encontra os dados estáticos para salvar tudo
+                        const staticData = allSamples.find(s => `${s.pedido}_${s.nf}_${s.produto}`.replace(/[^a-zA-Z0-9_-]/g, '_') === docId);
+
+                        const dataToSave = {
+                            ...staticData,
+                            docId: docId,
+                            novoFeedback: selectValue,
+                            observacoes: noteValue,
+                            lastUpdated: new Date().toISOString(),
+                            user: userId
+                        };
+                        
+                        batch.set(docRef, dataToSave, { merge: true }); // Use merge para não sobrescrever outros campos se houver
+                        itemsToSave++;
+                    }
+                }
+            });
+
+            if (missingNote) {
+                // Se houver erros, mostra modal e foca no primeiro erro
+                toggleAlertModal(true, 'O campo "Observações" é obrigatório para todos os itens com feedback selecionado.');
+                if (firstMissingRow) {
+                    firstMissingRow.querySelector('.notes-input').focus();
+                }
+            } else if (itemsToSave === 0) {
+                // Se nada foi selecionado
+                toggleAlertModal(true, 'Nenhum feedback foi selecionado para salvar.');
+            } else {
+                // Se tudo estiver OK, envia o batch
+                try {
+                    await batch.commit();
+                    
+                    // Mostra feedback de sucesso
+                    saveStatus.classList.remove('opacity-0');
+                    setTimeout(() => saveStatus.classList.add('opacity-0'), 3000); // Esconde após 3s
+                } catch (error) {
+                    console.error("Erro ao salvar dados: ", error);
+                    toggleAlertModal(true, `Erro ao salvar os dados: ${error.message}`);
+                }
+            }
+
+            // Esconde loading no botão
+            btnText.classList.remove('hidden');
+            spinner.classList.add('hidden');
+            saveBtn.disabled = false;
+        });
+
+
+        // Inicia o listener do Firestore para carregar dados salvos
+        function setupFirestoreListener() {
+            if (!dbCollection) return;
+            
+            const q = query(dbCollection);
+            onSnapshot(q, (snapshot) => {
+                loadingText.textContent = 'Atualizando dados...';
+                
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    const row = document.getElementById(doc.id);
+                    if (row) {
+                        const select = row.querySelector('.feedback-select');
+                        const input = row.querySelector('.notes-input');
+
+                        if (data.novoFeedback) {
+                            select.value = data.novoFeedback;
+                        }
+                        if (data.observacoes) {
+                            input.value = data.observacoes;
+                        }
+                        checkRowCompletion(row); // Atualiza cor da linha
+                    }
+                });
+                
+                // Esconde o overlay de carregamento
+                loadingOverlay.classList.add('opacity-0');
+                setTimeout(() => {
+                    loadingOverlay.style.display = 'none';
+                }, 300);
+
+            }, (error) => {
+                console.error("Erro ao carregar dados do Firestore: ", error);
+                loadingText.textContent = `Erro ao carregar dados: ${error.message}`;
+            });
+        }
+        
+        // Função principal de inicialização
+        async function initializeAppAndAuth() {
+            try {
+                // Configuração do Firebase
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+                if (!firebaseConfig.apiKey) {
+                    loadingText.textContent = 'Erro: Configuração do Firebase não encontrada.';
+                    return;
+                }
+
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('Debug'); // Ativa logs detalhados do Firestore
+
+                // Define o caminho da coleção no Firestore
+                // Usando um caminho público para colaboração
+                dbCollection = collection(db, `artifacts/${appId}/public/data/jmc_feedbacks`);
+
+                // Autenticação
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        console.log("Usuário autenticado:", user.uid);
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = `Seu ID de Colaborador: ${userId}`;
+                        
+                        // Agora que estamos autenticados, preenchemos a tabela e buscamos os dados salvos
+                        populateStaticData(allSamples);
+                        setupFirestoreListener();
+                    } else {
+                        console.log("Usuário não autenticado.");
+                    }
+                });
+
+                // Tenta login com token ou anônimo
+                if (typeof __initial_auth_token !== 'undefined') {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+            } catch (error) {
+                console.error('Erro na inicialização:', error);
+                loadingText.textContent = `Erro fatal na inicialização: ${error.message}`;
+            }
+        }
+
+        // Inicia a aplicação quando o DOM estiver pronto
+        document.addEventListener('DOMContentLoaded', initializeAppAndAuth);
+
+    </script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+    <!-- Overlay de Carregamento Inicial -->
+    <div id="loading-overlay" class="fixed inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-50">
+        <div class="spinner"></div>
+        <p id="loading-text" class="mt-4 text-gray-700 font-medium">Conectando ao banco de dados...</p>
+    </div>
+
+    <!-- Modal de Alerta -->
+    <div id="alertModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 opacity-0 pointer-events-none transition-opacity duration-300">
+        <div class="modal-content bg-white rounded-lg shadow-xl p-6 w-full max-w-md transform -translate-y-10 transition-transform duration-300">
+            <h3 class="text-lg font-medium leading-6 text-gray-900">Atenção</h3>
+            <div class="mt-2">
+                <p id="alertMessage" class="text-sm text-gray-500">...</p>
+            </div>
+            <div class="mt-4 text-right">
+                <button id="closeAlertBtn" type="button" class="inline-flex justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                    Entendido
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        
+        <!-- Cabeçalho e Botão Salvar -->
+        <div class="bg-white p-6 shadow-md rounded-lg mb-6">
+            <div class="sm:flex sm:items-center sm:justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold leading-7 text-gray-900 sm:truncate">Portal de Feedback de Amostras</h1>
+                    <p class="mt-2 text-sm text-gray-600">
+                        Para: <strong class="font-medium text-gray-800">JMC FOODS (03818001)</strong> | Vendedor: <strong class="font-medium text-gray-800">ALISSON FERNANDES</strong>
+                    </p>
+                    <p id="user-id-display" class="mt-1 text-xs text-gray-500">Carregando ID de colaborador...</p>
+                </div>
+                <div class="mt-5 sm:mt-0 sm:ml-4 flex-shrink-0 flex items-center justify-end gap-3">
+                    <!-- Mensagem de Status Salvo -->
+                    <span id="save-status" class="text-green-600 font-medium opacity-0 transition-opacity duration-300 flex items-center text-sm">
+                        <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                        Salvo com sucesso!
+                    </span>
+                    <!-- Botão Salvar -->
+                    <button id="saveBtn" type="button" class="inline-flex justify-center items-center rounded-md border border-transparent bg-indigo-600 px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50">
+                        <span class="btn-text">Salvar Alterações</span>
+                        <span class="spinner hidden w-5 h-5 animate-spin"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bloco de Instruções -->
+        <div class="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-md shadow-sm mb-6" role="alert">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <!-- Ícone de Informação -->
+                    <svg class="h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                    </svg>
+                </div>
+                <div class="ml-3">
+                    <h3 class="text-sm font-medium text-blue-800">Instruções de Preenchimento</h3>
+                    <div class="mt-2 text-sm text-blue-700">
+                        <ul class="list-disc space-y-1 pl-5">
+                            <li>Selecione o <strong>Novo Feedback</strong> para cada amostra testada.</li>
+                            <li><strong>Importante:</strong> Em caso de <strong>Reprovação</strong>, o campo "Observações" é crucial. Por favor, detalhe o motivo (ex: cheiro, gosto, textura, performance) para que possamos ajustar o produto.</li>
+                            <li>Clique em <strong>"Salvar Alterações"</strong> no canto superior direito para registrar suas respostas.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Fim do Bloco de Instruções -->
+
+        <!-- Tabela de Amostras -->
+        <div class="flex flex-col">
+            <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
+                <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
+                    <div class="overflow-hidden shadow-md ring-1 ring-black ring-opacity-5 rounded-lg">
+                        <table class="min-w-full divide-y divide-gray-300">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th scope="col" class="px-4 py-3.5 text-left text-sm font-semibold text-gray-700">Pedido</th>
+                                    <th scope="col" class="px-4 py-3.5 text-left text-sm font-semibold text-gray-700">NF</th>
+                                    <th scope="col" class="px-4 py-3.5 text-left text-sm font-semibold text-gray-700">Produto</th>
+                                    <th scope="col" class="px-4 py-3.5 text-left text-sm font-semibold text-gray-700 min-w-[300px]">Descrição</th>
+                                    <th scope="col" class="px-4 py-3.5 text-left text-sm font-semibold text-gray-700">Qtde.</th>
+                                    <th scope="col" class="px-4 py-3.5 text-left text-sm font-semibold text-gray-700">Status Atual</th>
+                                    <th scope="col" class="px-4 py-3.5 text-left text-sm font-semibold text-gray-700 min-w-[200px]">Novo Feedback (Ação)</th>
+                                    <th scope="col" class="px-4 py-3.5 text-left text-sm font-semibold text-gray-700 min-w-[200px]">
+                                        Observações <span class="text-red-500 font-normal">(Obrigatório)</span>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-body" class="divide-y divide-gray-200 bg-white">
+                                <!-- Linhas serão preenchidas pelo JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div> <!-- Fim do container -->
+
+</body>
+</html>
